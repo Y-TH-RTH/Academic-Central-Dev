@@ -7,7 +7,7 @@ const APP_CONFIG = {
   tagline: 'Tutoring & Academic Support',
 
   // From your Supabase project: Project Settings > API
-  supabaseUrl: 'https://azpfbdizrkbaqoanhzvh.supabase.co/rest/v1/',
+  supabaseUrl: 'https://azpfbdizrkbaqoanhzvh.supabase.co',
   supabaseAnonKey: 'sb_publishable_bfT2qTfUixZ7k3XqCKpPQw_R80BGqzP',
 
   // Teachers shown in the drop-down lists
