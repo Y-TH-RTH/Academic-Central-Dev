@@ -122,6 +122,16 @@
   }
   #nav-wrap .nav-grid { margin-bottom: 28px; }
 
+  /* Each nav card sits in a wrapper so its "i" icon can hang off the corner
+     without being clipped by the card's own overflow:hidden. */
+  .nav-item { position: relative; display: flex; }
+  .nav-item > .nav-button { flex: 1; }
+  .nav-item.full-span { grid-column: 1 / -1; }
+  .nav-item .info-icon.corner { top: -8px; right: -8px; z-index: 6; }
+  /* Open the bubble leftward so it never runs off the right edge of the screen */
+  .nav-item .info-icon.corner::after { left: auto; right: -8px; transform: none; }
+  .nav-item .info-icon.corner::before { left: auto; right: 8px; transform: none; }
+
   .launch { margin: 36px 2px 18px; }
   .launch h2 {
     margin: 0 0 10px;
@@ -213,6 +223,29 @@
       </section>
     </div>
   </div>
+
+<script>
+  // Info cards for the five main buttons (hover or focus the little "i").
+  (function () {
+    var tips = {
+      'admin-login.html': 'For program staff. Sign in to manage tutors, review applications, and track students who need extra help. Need an account? Ask a Head Admin.',
+      'applications.html': 'Want to become a tutor? Fill out this form with your grades and pick the teachers who can recommend you. No account needed.',
+      'tutors.html': 'For approved tutors. See your assigned day and room, your volunteer hours, and request an absence.',
+      'signin-sheet.html': 'Used during a tutoring session. Tutors sign in, add students as they arrive, and submit the sheet at the end to record attendance and hours.',
+      'parents.html': 'For parents and guardians. See which days your student attended tutoring each week.'
+    };
+    document.querySelectorAll('.nav-grid > .nav-button').forEach(function (a) {
+      var tip = tips[a.getAttribute('href')];
+      if (!tip) return;
+      var wrap = document.createElement('div');
+      wrap.className = 'nav-item' + (a.classList.contains('full-span') ? ' full-span' : '');
+      a.classList.remove('full-span');
+      a.parentNode.insertBefore(wrap, a);
+      wrap.appendChild(a);
+      wrap.appendChild(makeInfoIcon(tip, true));
+    });
+  })();
+</script>
 
 <script>
   if (APP_CONFIG.demo && APP_CONFIG.demo.enabled) {
