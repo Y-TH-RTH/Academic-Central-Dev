@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Sign Up/In</title>
+<link rel="stylesheet" href="style.css">
+<script src="tooltips.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="title-bar">Academic Central</div>
+    <div class="subtitle-bar">Admin Sign Up/In</div>
+
+    <form class="panel" id="login-form">
+      <label for="username">Username:</label>
+      <input type="text" id="username" name="username" required>
+      <label for="password">Password:</label>
+      <input type="password" id="password" name="password" required>
+      <div class="check-group">
+        <label><input type="checkbox" id="show-password"> Show password</label>
+      </div>
+    </form>
+
+    <div class="panel hidden" id="not-in-db-panel">
+      <p style="color:var(--gold); margin-top:0;">- - - Not In Database - - -</p>
+      <label for="fullname">Full Name:</label>
+      <input type="text" id="fullname" name="fullname" placeholder="Leave blank if this was just a typo">
+      <p id="pending-msg" class="hidden" style="color:var(--gold); font-weight:bold;">
+        Pending / waiting for approval.
+      </p>
+    </div>
+
+    <button class="btn" id="submit-btn" type="submit" form="login-form">Sign Up/In</button>
+    <br><br>
+    <a class="back-link" href="home.html">&larr; Back to Home</a>
+  </div>
+
+<script>
+  const SUPABASE_URL = 'https://qdjgnxvomzukvsxjrhen.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFkamdueHZvbXp1a3ZzeGpyaGVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwMzU5OTUsImV4cCI6MjEwNTYxMTk5NX0.H_Qc5zuK1TMslOFuFTXa0rZg-JVDJZtuvanQySwkD84';
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const form = document.getElementById('login-form');
+  const notInDbPanel = document.getElementById('not-in-db-panel');
+  const fullnameInput = document.getElementById('fullname');
+  const pendingMsg = document.getElementById('pending-msg');
+  const usernameInput = document.getElementById('username');
+  const passwordInput = document.getElementById('password');
+
+  let hasFailedOnce = false;
+  let pendingRequestSent = false;
+
+  async function checkCredentials(username, password) {
+    const { data, error } = await db.rpc('checker', {
+      p_username: username,
+      p_password: password
+    });
+    if (error) {
+      console.error(error);
+      return null;
+    }
+    // checker returns an array; a match means one row came back
+    return (data && data.length > 0) ? data[0] : null;
+  }
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const username = usernameInput.value.trim();
+    const password = passwordInput.value.trim();
+    const fullname = fullnameInput.value.trim();
+
+    const match = await checkCredentials(username, password);
+
+    if (match) {
+      // Store just enough to identify who's logged in for the dashboard UI.
+      // Never store the password itself.
+      sessionStorage.setItem('admin_session', JSON.stringify({
+        id: match.id,
+        full_name: match.full_name,
+        role: match.role,
+        username: username
+      }));
+      window.location.href = 'dashboard.html';
+      return;
+    }
+
+    // Failed attempt
+    if (!hasFailedOnce) {
+      hasFailedOnce = true;
+      notInDbPanel.classList.remove('hidden');
+      return;
+    }
+
+    if (fullname === '') {
+      // Just a typo — let them keep correcting username/password.
+      return;
+    }
+
+    // NOTE: the actual "send this request to all admins for review" step
+    // isn't built yet — that needs its own pending_admin_requests table.
+    // This just shows the pending message for now.
+    pendingRequestSent = true;
+    pendingMsg.classList.remove('hidden');
+    pendingMsg.textContent = 'Pending / waiting for approval.';
+  });
+</script>
+
+<script>
+  // Show/hide password toggle
+  document.getElementById('show-password').addEventListener('change', function () {
+    document.getElementById('password').type = this.checked ? 'text' : 'password';
+  });
+</script>
+
+<script>
+  addInfoTips({
+    'username': 'The username given to you when your admin account was created — usually your first and last name together, all lowercase.',
+    'password': 'Your admin password. If you\'ve forgotten it, ask another admin to help you change it from the dashboard once you\'re in.',
+    'fullname': 'Only fill this in if you believe your account should exist but the username/password above didn\'t work. Leave it blank if you just mistyped — you can try again above.',
+    'submit-btn': 'Checks your username and password against the admin list and takes you to the dashboard if they match.'
+  });
+</script>
+</body>
+</html>

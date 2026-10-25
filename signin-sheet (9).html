@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutoring Sign-In Sheet</title>
+<link rel="stylesheet" href="style.css">
+<script src="tooltips.js"></script>
+
+<!-- Backend helper (talks to Google Apps Script) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+
+<style>
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } }
+  .calendar-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+  .calendar-header button { background:var(--blue-dark); color:var(--gold); border:none; border-radius:6px; padding:4px 8px; cursor:pointer; font-family:inherit; }
+  td.day-cell { cursor:pointer; }
+  td.day-cell:hover { background:#c3d3f2; }
+  td.selected { background: var(--gold) !important; font-weight:bold; }
+  td.empty-cell { background:#eef2fb; }
+  .tutee-table { width:100%; border-collapse:collapse; margin-top:10px; }
+  .tutee-table th, .tutee-table td { border:1px solid var(--blue); padding:6px; color:var(--ink); background:#fff; font-size:0.85rem; }
+  .tutee-table th { background:var(--blue-light); }
+  .btn[disabled] { opacity:0.5; cursor:not-allowed; }
+  select { width:100%; margin-top:4px; padding:8px; border-radius:6px; font-family:inherit; }
+  .searchable-select { position: relative; margin-top: 4px; }
+  .searchable-select .ss-input { width:100%; padding:8px; border-radius:6px; font-family:inherit; border:1px solid var(--line); }
+  .ss-panel {
+    position:absolute; top:100%; left:0; right:0; z-index:20;
+    background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    max-height:200px; overflow-y:auto; margin-top:4px; box-shadow:0 8px 24px rgba(0,0,0,0.15);
+  }
+  .ss-group-label { padding:6px 10px; font-size:0.72rem; font-weight:700; color:var(--ink-soft); background:var(--bg); text-transform:uppercase; }
+  .ss-option { padding:8px 12px; cursor:pointer; font-size:0.88rem; }
+  .ss-option:hover { background:var(--blue-soft); }
+  input[type="time"] { width:100%; margin-top:6px; padding:11px 13px; border-radius:9px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-family:inherit; font-size:0.95rem; }
+  input[type="time"]:focus { outline:none; border-color:var(--gold-bright); box-shadow:0 0 0 3px var(--gold-soft); }
+</style>
+</head>
+<body>
+  <div class="container wide">
+    <div class="title-bar">Academic Central</div>
+    <div class="subtitle-bar" id="page-subtitle">Tutoring Sign-In Sheet — Not Started Yet</div>
+
+    <div class="panel" style="border-color:var(--blue-line);">
+      <p style="margin:0 0 8px; font-size:0.9rem;"><b>How this works:</b> the first tutor to sign in to a room starts that room's sheet for the day and automatically becomes <b>Room Lead</b> (they're the only one who can edit the room number/type and submit the finished sheet). Every tutor after that just joins the same sheet as a regular Tutor. One sheet is shared live across every computer in the room.</p>
+      <p style="margin:0; font-size:0.9rem;"><b>Upper</b> and <b>Lower</b> refer to which floor/room group of the building the tutoring is happening in — pick whichever one you're physically in.</p>
+    </div>
+
+    <div class="panel hidden" id="resume-banner" style="border-color:var(--gold-bright);">
+      <b>A sign-in sheet is still open for this computer.</b> Press <b>Sign In as Tutor</b> below and enter your username/password to pick it back up.
+    </div>
+    <div id="open-rooms" style="color:var(--ink-soft); font-size:0.85rem; margin:-8px 0 4px;"></div>
+    <div id="sync-status" style="text-align:right; color:var(--ink-soft); font-size:0.8rem; margin:-8px 0 8px;"></div>
+
+    <div class="layout">
+      <div>
+        <div class="panel">
+          <label for="room-number">Room Number:</label>
+          <input type="text" id="room-number" placeholder="###">
+          <label>Room Type:<span class="info-icon" tabindex="0" data-tip="Upper and Lower refer to which floor/room group of the building you're tutoring in. Pick whichever one matches where you physically are right now.">i</span></label>
+          <div class="check-group">
+            <label><input type="radio" name="room-type" value="Upper" checked> Upper</label>
+            <label><input type="radio" name="room-type" value="Lower"> Lower</label>
+          </div>
+        </div>
+
+        <div class="side-buttons">
+          <button class="btn" id="btn-add-entry">Sign In as Tutor</button>
+          <button class="btn" id="btn-edit-tutors" disabled>Edit Tutors</button>
+          <button class="btn" id="btn-add-tutee" disabled>Add Student</button>
+          <button class="btn" id="btn-edit-tutee" disabled>Edit Student</button>
+          <button class="btn" id="btn-remove-tutee" disabled>Remove Student</button>
+          <button class="btn secondary" id="btn-submit-entry">Submit &amp; Close Sheet</button>
+          <button class="btn secondary hidden" id="btn-cancel-sheet" type="button">Cancel This Sheet</button>
+        </div>
+
+        <p id="locked-reminder" style="font-size:0.82rem; color:var(--ink-soft); margin:6px 2px;">Sign in as a tutor above to unlock Edit Tutors, Add Student, Edit Student, and Remove Student.</p>
+        <p id="submit-reminder" class="hidden" style="font-size:0.82rem; color:var(--gold); margin:6px 2px;">Before you leave, press <b>Submit &amp; Close Sheet</b>. A sheet that is not submitted does not count toward attendance or tutor hours.</p>
+
+        <table class="tutee-table" id="tutee-table">
+          <thead>
+            <tr><th>Name</th><th>Subject</th><th>Teacher</th><th>Signed In</th><th>Signed Out</th></tr>
+          </thead>
+          <tbody id="tutee-body"></tbody>
+        </table>
+      </div>
+
+      <div>
+        <div class="panel">
+          <div class="date-display" id="date-display" style="color:var(--gold);">Date: --/--/----</div>
+          <div class="calendar-header">
+            <div><button id="prev-month">&larr; Month</button> <button id="next-month">Month &rarr;</button></div>
+            <div><button id="prev-year">&larr; Year</button> <button id="next-year">Year &rarr;</button></div>
+          </div>
+          <div id="month-year-label" style="text-align:center; color:var(--gold); font-weight:bold; margin-bottom:6px;"></div>
+          <table class="grid-table">
+            <thead>
+              <tr><th>Sun</th><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th></tr>
+            </thead>
+            <tbody id="calendar-body"></tbody>
+          </table>
+        </div>
+
+        <table class="tutee-table" id="tutor-table">
+          <thead>
+            <tr><th>Tutor Username</th><th>Role</th></tr>
+          </thead>
+          <tbody id="tutor-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <br>
+    <a class="back-link" href="home.html">&larr; Back to Home</a>
+  </div>
+
+  <!-- Add Entry: username + password -->
+  <div class="modal-overlay hidden" id="modal-add-entry">
+    <div class="modal">
+      <h3>Tutor Sign In</h3>
+      <label>Username:</label>
+      <input type="text" id="entry-username">
+      <label>Password:</label>
+      <input type="password" id="entry-password">
+      <div id="entry-room-wrap">
+        <label>Room:</label>
+        <div class="check-group">
+          <label><input type="radio" name="entry-room-type" value="Upper" checked> <span id="entry-room-upper">Upper</span></label>
+          <label><input type="radio" name="entry-room-type" value="Lower"> <span id="entry-room-lower">Lower</span></label>
+        </div>
+      </div>
+      <p id="entry-room-note" style="color:var(--gold); font-size:0.85rem;">The first tutor to sign in to a room starts its sheet and becomes Room Lead. Everyone after that joins it.</p>
+      <br>
+      <button class="btn" id="entry-submit">Continue</button>
+      <button class="btn secondary" type="button" onclick="closeModal('modal-add-entry')">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Edit Tutors: 3-tab modal -->
+  <div class="modal-overlay hidden" id="modal-edit-tutors">
+    <div class="modal">
+      <div class="tabs" style="margin-bottom:12px;">
+        <button class="tab active" id="tab-role" type="button">Edit Role</button>
+        <button class="tab" id="tab-add" type="button">Add Tutor</button>
+        <button class="tab" id="tab-remove" type="button">Remove Tutor</button>
+      </div>
+
+      <!-- Edit Role panel -->
+      <div id="panel-role">
+        <label>Tutor:</label>
+        <select id="role-target-username"></select>
+        <label>New Role:</label>
+        <select id="role-new-value">
+          <option value="Room Lead">Room Lead</option>
+          <option value="Swing">Swing</option>
+          <option value="Tutor">Tutor</option>
+        </select>
+        <label>Confirm with Username:</label>
+        <input type="text" id="role-confirm-username">
+        <label>Confirm with Password:</label>
+        <input type="password" id="role-confirm-password">
+        <br><br>
+        <button class="btn" id="role-submit">Confirm Change</button>
+      </div>
+
+      <!-- Add Tutor panel -->
+      <div id="panel-add" class="hidden">
+        <label>Username:</label>
+        <input type="text" id="add-tutor-username">
+        <label>Password:</label>
+        <input type="password" id="add-tutor-password">
+        <br><br>
+        <button class="btn" id="add-tutor-submit">Add Tutor</button>
+      </div>
+
+      <!-- Remove Tutor panel -->
+      <div id="panel-remove" class="hidden">
+        <label>Tutor Name/Username to Remove:</label>
+        <input type="text" id="remove-tutor-name">
+        <label>Confirming Tutor's Username:</label>
+        <input type="text" id="remove-tutor-confirm-username">
+        <label>Confirming Tutor's Password:</label>
+        <input type="password" id="remove-tutor-confirm-password">
+        <br><br>
+        <button class="btn" id="remove-tutor-submit">Remove Tutor</button>
+      </div>
+
+      <br>
+      <button class="btn secondary" type="button" onclick="closeModal('modal-edit-tutors')">Close</button>
+    </div>
+  </div>
+
+  <!-- Add Tutee modal -->
+  <div class="modal-overlay hidden" id="modal-add-tutee">
+    <div class="modal">
+      <h3>Add Student</h3>
+      <form id="tutee-form">
+        <label>Full Name:</label>
+        <input type="text" id="tutee-name" required autocomplete="off">
+        <div id="name-suggest" class="hidden" style="border:1px solid var(--line); border-radius:8px; margin-top:4px; max-height:180px; overflow-y:auto; background:var(--surface);"></div>
+
+        <label>Subject:</label>
+        <div class="searchable-select" id="tutee-subject-searchable">
+          <input type="text" class="ss-input" placeholder="Type to search subjects..." autocomplete="off">
+          <input type="hidden" id="tutee-subject" required>
+          <div class="ss-panel hidden"></div>
+        </div>
+
+        <label>Teacher:</label>
+        <select id="tutee-teacher"></select>
+
+        <br><br>
+        <button class="btn" type="submit">Sign In Student</button>
+        <button class="btn secondary" type="button" onclick="closeModal('modal-add-tutee')">Cancel</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Tutee modal -->
+  <div class="modal-overlay hidden" id="modal-edit-tutee">
+    <div class="modal">
+      <div class="tabs" style="margin-bottom:12px;">
+        <button class="tab active" id="tab-edit-info" type="button">Edit Info</button>
+        <button class="tab" id="tab-sign-out" type="button">Student Sign Out</button>
+        <button class="tab" id="tab-edit-time" type="button">Edit Time</button>
+      </div>
+
+      <div id="panel-edit-info">
+        <label>Full Name:</label>
+        <input type="text" id="edit-tutee-name" placeholder="Name as currently on file">
+        <label>New Subject (optional):</label>
+        <input type="text" id="edit-tutee-subject">
+        <label>New Teacher (optional):</label>
+        <input type="text" id="edit-tutee-teacher">
+        <p style="color:var(--gold); font-size:0.85rem;">Subject/teacher changes require a tutor to accept before taking effect.</p>
+        <br>
+        <button class="btn" type="button" onclick="alert('Change submitted — waiting on tutor acceptance.'); closeModal('modal-edit-tutee')">Submit Change</button>
+      </div>
+
+      <div id="panel-sign-out" class="hidden">
+        <label>Full Name:</label>
+        <input type="text" id="signout-name" placeholder="Ends all of this student's active sessions">
+        <br><br>
+        <button class="btn" type="button" id="btn-do-signout">Sign Out</button>
+      </div>
+
+      <div id="panel-edit-time" class="hidden">
+        <label>Student:</label>
+        <select id="time-student"></select>
+        <label>Signed in:</label>
+        <input type="time" id="time-in">
+        <label>Signed out <span style="font-weight:400;color:var(--ink-soft);font-size:0.85rem;">(leave blank if still here)</span>:</label>
+        <input type="time" id="time-out">
+        <p id="time-duration" style="font-size:0.85rem; color:var(--ink-soft);"></p>
+        <p style="color:var(--gold); font-size:0.85rem;">A student needs at least 50 minutes between sign-in and sign-out to count toward the Struggling Students list.</p>
+        <br>
+        <button class="btn" type="button" id="btn-save-time">Save Times</button>
+      </div>
+
+      <br>
+      <button class="btn secondary" type="button" onclick="closeModal('modal-edit-tutee')">Close</button>
+    </div>
+  </div>
+
+  <!-- Remove Student modal -->
+  <div class="modal-overlay hidden" id="modal-remove-tutee">
+    <div class="modal">
+      <h3>Remove Student</h3>
+      <label>Student:</label>
+      <select id="remove-student-select"></select>
+      <p style="color:var(--gold); font-size:0.85rem;">Use this for a student added by mistake. They will not be saved to the roster.</p>
+      <br>
+      <button class="btn" type="button" id="btn-do-remove-student">Remove Student</button>
+      <button class="btn secondary" type="button" onclick="closeModal('modal-remove-tutee')">Close</button>
+    </div>
+  </div>
+
+  <!-- Cancel This Sheet: Room Lead only -->
+  <div class="modal-overlay hidden" id="modal-cancel-sheet">
+    <div class="modal">
+      <h3>Cancel This Sheet</h3>
+      <label>Room Lead username:</label>
+      <input type="text" id="cancel-username">
+      <label>Password:</label>
+      <input type="password" id="cancel-password">
+      <p style="color:var(--gold); font-size:0.85rem;">This closes the sheet on every computer WITHOUT saving it to the roster, and tutors get no hours. A copy of the students is kept for review. Use it only if the sheet is stuck or was started by mistake.</p>
+      <br>
+      <button class="btn" type="button" id="cancel-sheet-confirm">Cancel This Sheet</button>
+      <button class="btn secondary" type="button" onclick="closeModal('modal-cancel-sheet')">Keep the Sheet</button>
+    </div>
+  </div>
+
+  <!-- Submit Entry: username + password -->
+  <div class="modal-overlay hidden" id="modal-submit-entry">
+    <div class="modal">
+      <h3>Submit Entry — Confirm</h3>
+      <label>Username:</label>
+      <input type="text" id="submit-username">
+      <label>Password:</label>
+      <input type="password" id="submit-password">
+      <p style="color:var(--gold); font-size:0.85rem;">This will sign out any remaining students and save today's session to the database. It ends the sheet on every computer.</p>
+      <br>
+      <button class="btn" id="submit-entry-confirm">Confirm &amp; Submit</button>
+      <button class="btn secondary" type="button" onclick="closeModal('modal-submit-entry')">Cancel</button>
+    </div>
+  </div>
+
+<script>
+  /* ---------- Supabase ---------- */
+  const SUPABASE_URL = 'https://qdjgnxvomzukvsxjrhen.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFkamdueHZvbXp1a3ZzeGpyaGVuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwMzU5OTUsImV4cCI6MjEwNTYxMTk5NX0.H_Qc5zuK1TMslOFuFTXa0rZg-JVDJZtuvanQySwkD84';
+  const { createClient } = supabase;
+  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  // Same db.rpc(...) the rest of this page uses. It adds the sign-in token to the shared-sheet
+  // functions and remembers the token when a tutor signs in.
+  const db = {
+    rpc: async (name, params) => {
+      const args = Object.assign({}, params || {});
+      if (name.indexOf('live_') === 0 && name !== 'live_any_active') args.p_token = sessionStorage.getItem('live_token');
+      const r = await sb.rpc(name, args);
+      if (!r.error && name === 'tutor_checker' && r.data && r.data[0] && r.data[0].token) {
+        sessionStorage.setItem('live_token', r.data[0].token);
+      }
+      return r;
+    }
+  };
+
+
+  // Same grouped subject list as applications.html — order and headings preserved
+  const CLASS_GROUPS = {
+    'Math': ['Pre-Algebra', 'Algebra 1', 'Algebra 2', 'Geometry', 'Precalc/Trig', 'AP Precalc', 'Calculus', 'AP Calc AB', 'AP Calc BC', 'AP Stats'],
+    'English': ['7 English', '8 English', 'English I', 'English II', 'English III w/ Personal Comm', 'AP Lang', 'AP Lit', 'AP Seminar', 'AP Research', 'Journalism'],
+    'Science': ['7 Science', '8 Science', 'Physical Science', 'Physics', 'AP Physics C', 'Biology', 'AP Bio', 'AP Environmental Science', 'Chemistry', 'Chemistry 2', 'Chemistry of Foods'],
+    'Computer Science': ['8 KC', 'Intro to Comp Sci', 'AP CSP', 'AP CSA', 'Game Development'],
+    'Social Studies': ['7 SS', '8 SS', 'Civics/Econ', 'AP US Gov', 'AP Micro/Macro', 'Intro to Crim', 'CSI', 'World History', 'AP World', 'US History', 'APUSH', 'AP Psych', 'AP Business'],
+    'Health Sciences': ['7 Career', '7 Health', '7 PE', '8 Health', '8 PE', 'Health', 'A&P', 'Med Term', 'Recreational Sports', 'College & Career', 'Personal Fitness'],
+    'Fine Arts': ['7 Theatre', '7 Art', '8 Art', 'Drawing 1', 'Painting 1', 'Visual Art Foundations 1', 'Sculpture', 'Studio Art', 'AP Art History'],
+    'World Languages': ['Spanish 1', 'Spanish 2', 'Spanish 3', 'AP Spanish Lang', 'French 3', 'AP French Lang']
+  };
+
+  function makeSearchableSelect(containerEl, groups) {
+    const input = containerEl.querySelector('.ss-input');
+    const hidden = containerEl.querySelector('input[type="hidden"]');
+    const panel = containerEl.querySelector('.ss-panel');
+
+    function renderPanel(filterText) {
+      const f = filterText.trim().toLowerCase();
+      panel.innerHTML = '';
+      let anyMatch = false;
+      Object.entries(groups).forEach(([groupName, items]) => {
+        const matches = items.filter(item => item.toLowerCase().includes(f));
+        if (matches.length === 0) return;
+        anyMatch = true;
+        const label = document.createElement('div');
+        label.className = 'ss-group-label';
+        label.textContent = groupName;
+        panel.appendChild(label);
+        matches.forEach(item => {
+          const opt = document.createElement('div');
+          opt.className = 'ss-option';
+          opt.textContent = item;
+          opt.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            input.value = item;
+            hidden.value = item;
+            panel.classList.add('hidden');
+          });
+          panel.appendChild(opt);
+        });
+      });
+      if (!anyMatch) panel.innerHTML = '<div class="ss-option" style="color:var(--ink-soft);">No matches</div>';
+      panel.classList.remove('hidden');
+    }
+
+    input.addEventListener('focus', () => renderPanel(input.value));
+    input.addEventListener('input', () => { hidden.value = ''; renderPanel(input.value); });
+    input.addEventListener('blur', () => setTimeout(() => panel.classList.add('hidden'), 100));
+  }
+
+  makeSearchableSelect(document.getElementById('tutee-subject-searchable'), CLASS_GROUPS);
+
+  // Teacher last names are pulled live from the admins table (Supabase)
+  // instead of being hardcoded, so this list always matches who's actually
+  // an admin/teacher in the system.
+  (async function loadTeacherOptions() {
+    const sel = document.getElementById('tutee-teacher');
+    const { data, error } = await db.rpc('list_admins', {});
+    if (error || !data) { console.error(error); return; }
+    const names = [...new Set(data.map(r => (r.full_name || '').trim().split(' ').slice(-1)[0]).filter(Boolean))];
+    names.sort();
+    sel.innerHTML = names.map(t => `<option>${t}</option>`).join('');
+  })();
+
+  /* ---------- Helpers ---------- */
+  function pad(n) { return n.toString().padStart(2, '0'); }
+  function timeStringFull(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
+  function timeStringShort(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function toISODate(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+
+  function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+  function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+  /* ---------- Calendar ---------- */
+  let viewYear = new Date().getFullYear();
+  let viewMonth = new Date().getMonth();
+  let selectedDate = null;
+
+  const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const calendarBody = document.getElementById('calendar-body');
+  const monthYearLabel = document.getElementById('month-year-label');
+  const dateDisplay = document.getElementById('date-display');
+
+  function renderCalendar() {
+    calendarBody.innerHTML = '';
+    monthYearLabel.textContent = monthNames[viewMonth] + ' ' + viewYear;
+
+    const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+    let date = 1;
+    const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
+    const rows = totalCells / 7;
+
+    for (let r = 0; r < rows; r++) {
+      const tr = document.createElement('tr');
+      for (let c = 0; c < 7; c++) {
+        const cellIndex = r * 7 + c;
+        const td = document.createElement('td');
+        if (cellIndex < firstDay || date > daysInMonth) {
+          td.classList.add('empty-cell');
+          td.innerHTML = '&nbsp;';
+        } else {
+          td.classList.add('day-cell');
+          td.textContent = date;
+          const thisDate = date;
+          td.addEventListener('click', () => selectDate(thisDate, td));
+          date++;
+        }
+        tr.appendChild(td);
+      }
+      calendarBody.appendChild(tr);
+    }
+  }
+
+  function selectDate(day, cellEl) {
+    if (!canEditInfo()) return;
+    document.querySelectorAll('.day-cell.selected').forEach(el => el.classList.remove('selected'));
+    cellEl.classList.add('selected');
+    selectedDate = new Date(viewYear, viewMonth, day);
+    dateDisplay.textContent = 'Date: ' + pad(day) + '-' + pad(viewMonth + 1) + '-' + viewYear;
+    syncInfo();
+  }
+
+  document.getElementById('prev-month').addEventListener('click', () => {
+    viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+    renderCalendar();
+  });
+  document.getElementById('next-month').addEventListener('click', () => {
+    viewMonth++; if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+    renderCalendar();
+  });
+  document.getElementById('prev-year').addEventListener('click', () => { viewYear--; renderCalendar(); });
+  document.getElementById('next-year').addEventListener('click', () => { viewYear++; renderCalendar(); });
+
+  renderCalendar();
+
+  /* ---------- Shared sign-in sheet (kept on the server so every computer sees the same sheet) ---------- */
+  const SAVED_KEY = 'signin_session_id';
+  let sessionId = null;      // the sheet this computer is showing
+  let pendingId = null;      // a sheet this computer had open before a refresh (needs a sign-in to resume)
+  let me = null;             // username of the tutor who signed in here
+  let tutors = [];           // { username, role }
+  let tutees = [];           // { id, name, subject, teacher, signedIn, signedOut }
+  let pendingAdds = [];      // students being saved right now (shown immediately)
+  let pollTimer = null;
+  let lastLocalEdit = 0;
+  const syncStatus = document.getElementById('sync-status');
+
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function setStatus(msg) { syncStatus.textContent = msg; }
+  function myRole() { const t = tutors.find(x => x.username === me); return t ? t.role : null; }
+  function canEditInfo() { return !sessionId || myRole() === 'Room Lead'; }
+
+  async function live(name, params) {
+    if (!sessionId) return { error: { message: 'No sign-in sheet is open.' } };
+    setStatus('Saving…');
+    const r = await db.rpc(name, Object.assign({ p_session_id: sessionId }, params || {}));
+    setStatus(r.error ? 'Problem: ' + r.error.message : 'Synced ' + timeStringShort(new Date()));
+    return r;
+  }
+
+  /* ---------- Tutors ---------- */
+  const tutorBody = document.getElementById('tutor-body');
+  function renderTutors() {
+    tutorBody.innerHTML = '';
+    tutors.forEach(t => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(t.username)}</td><td>${esc(t.role)}</td>`;
+      tutorBody.appendChild(tr);
+    });
+    const roleSelect = document.getElementById('role-target-username');
+    roleSelect.innerHTML = '';
+    tutors.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.username;
+      opt.textContent = t.username + ' (' + t.role + ')';
+      roleSelect.appendChild(opt);
+    });
+  }
+
+  function setLocked(locked) {
+    ['btn-edit-tutors', 'btn-add-tutee', 'btn-edit-tutee', 'btn-remove-tutee'].forEach(id => { document.getElementById(id).disabled = locked; });
+    document.getElementById('locked-reminder').classList.toggle('hidden', !locked);
+  }
+  function unlockButtons() { setLocked(false); }
+
+  function updateSubmitVisibility() {
+    const btn = document.getElementById('btn-submit-entry');
+    btn.classList.toggle('hidden', !!sessionId && myRole() !== 'Room Lead');
+    document.getElementById('submit-reminder').classList.toggle('hidden', !(sessionId && myRole() === 'Room Lead'));
+    document.getElementById('btn-cancel-sheet').classList.toggle('hidden', !(sessionId && myRole() === 'Room Lead'));
+  }
+
+  /* ---------- Students ---------- */
+  const tuteeBody = document.getElementById('tutee-body');
+  function renderTutees() {
+    tuteeBody.innerHTML = '';
+    tutees.concat(pendingAdds).forEach(t => {
+      const tr = document.createElement('tr');
+      if (t.pending) tr.style.opacity = '0.55';
+      tr.innerHTML = `<td>${esc(t.name)}</td><td>${esc(t.subject)}</td><td>${esc(t.teacher)}</td>
+                       <td>${esc((t.signedIn || '').slice(0, 5))}</td>
+                       <td>${t.signedOut ? esc(t.signedOut.slice(0, 5)) : '—'}</td>`;
+      tuteeBody.appendChild(tr);
+    });
+  }
+
+  /* ---------- Applying what the server tells us ---------- */
+  function applySelectedDate(iso) {
+    if (!iso) return;
+    if (selectedDate && toISODate(selectedDate) === iso) return;
+    const [y, m, d] = iso.split('-').map(Number);
+    selectedDate = new Date(y, m - 1, d);
+    viewYear = y; viewMonth = m - 1;
+    renderCalendar();
+    document.querySelectorAll('.day-cell').forEach(el => { if (el.textContent === String(d)) el.classList.add('selected'); });
+    dateDisplay.textContent = 'Date: ' + pad(d) + '-' + pad(m) + '-' + y;
+  }
+
+  function applyState(st) {
+    if (!st || !st.session) return;
+    sessionId = st.session.id;
+    pendingId = null;
+    localStorage.setItem('signin_session_id', sessionId);
+    tutors = st.session.tutors || [];
+    tutees = st.students || [];
+    if (!me && st.me) me = st.me;
+    if (Date.now() - lastLocalEdit > 10000) {   // don't overwrite something this computer just changed
+      const rn = document.getElementById('room-number');
+      if (document.activeElement !== rn) rn.value = st.session.room_number || '';
+      applySelectedDate(st.session.session_date);
+    }
+    const rt = document.querySelector('input[name="room-type"][value="' + (st.session.room_type || 'Upper') + '"]');
+    if (rt) rt.checked = true;
+    document.querySelectorAll('input[name="room-type"]').forEach(r => { r.disabled = true; });   // the room (Upper/Lower) is fixed once a sheet starts
+    document.getElementById('room-number').disabled = !canEditInfo();
+    renderTutors(); renderTutees(); unlockButtons(); updateSubmitVisibility();
+    // do not rewrite these lists while someone is in the middle of using them
+    if (document.getElementById('modal-edit-tutee').classList.contains('hidden')) fillTimeChoices();
+    if (document.getElementById('modal-remove-tutee').classList.contains('hidden')) fillRemoveChoices();
+    document.getElementById('resume-banner').classList.add('hidden');
+    setStatus('Synced ' + timeStringShort(new Date()));
+    startPolling();
+  }
+
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (sessionId) poll(); refreshOpenRooms(); } });
+  function startPolling() { if (!pollTimer) pollTimer = setInterval(poll, 8000); }
+  function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+  async function poll() {
+    if (!sessionId || document.hidden) return;
+    const r = await db.rpc('live_state', { p_session_id: sessionId });
+    if (r.error) {
+      if (/log in again/i.test(r.error.message)) { showResumeBanner(); }
+      else if (/submitted|no longer active|not found/i.test(r.error.message)) { alert('This sign-in sheet was submitted or has expired.'); resetPageForNewEntry(); }
+      else { setStatus('Offline — retrying… (' + r.error.message + ')'); }
+      return;
+    }
+    applyState(r.data);
+  }
+
+  function showResumeBanner() {
+    pendingId = sessionId || pendingId;
+    stopPolling();
+    sessionId = null;
+    setLocked(true);
+    document.getElementById('resume-banner').classList.remove('hidden');
+    setStatus('Signed out — sign in again to continue.');
+  }
+
+  /* ---------- Room info (room number, type, date) is shared too ---------- */
+  function syncInfo() {
+    if (!sessionId || !canEditInfo()) return;
+    lastLocalEdit = Date.now();
+    live('live_set_info', {
+      p_room_number: document.getElementById('room-number').value.trim(),
+      p_session_date: selectedDate ? toISODate(selectedDate) : ''
+    }).then(r => { if (r && !r.error) applyState(r.data); });
+  }
+  document.getElementById('room-number').addEventListener('change', syncInfo);
+
+  /* ---------- Add Entry (tutor sign-in: starts a sheet, resumes one, or joins one) ---------- */
+  document.getElementById('btn-add-entry').addEventListener('click', () => {
+    document.getElementById('entry-username').value = '';
+    document.getElementById('entry-password').value = '';
+    openModal('modal-add-entry');
+  });
+
+  async function joinSession(id) {
+    const r = await db.rpc('live_join', { p_session_id: id });
+    if (r.error) { alert(r.error.message); return false; }
+    applyState(r.data);
+    return true;
+  }
+
+  /* Which rooms have an open sheet (also drives the yellow bar) */
+  let openRooms = { active: false, upper: false, lower: false };
+  function updateEntryLabels() {
+    document.getElementById('entry-room-upper').textContent = 'Upper' + (openRooms.upper ? ' (sheet is open — you will join it)' : ' (not started — you will start it)');
+    document.getElementById('entry-room-lower').textContent = 'Lower' + (openRooms.lower ? ' (sheet is open — you will join it)' : ' (not started — you will start it)');
+  }
+  async function refreshOpenRooms() {
+    if (document.hidden) return;
+    const r = await db.rpc('live_any_active', {});
+    if (r.error || !r.data || !r.data[0]) return;
+    const row = r.data[0];
+    openRooms = { active: row.active, upper: row.upper_open, lower: row.lower_open };
+    document.getElementById('page-subtitle').textContent = openRooms.active ? 'Tutoring Sign-In Sheet — In Progress' : 'Tutoring Sign-In Sheet — Not Started Yet';
+    document.getElementById('open-rooms').textContent = openRooms.active
+      ? 'Open now: ' + [openRooms.upper ? 'Upper' : null, openRooms.lower ? 'Lower' : null].filter(Boolean).join(' and ') + ' room'
+      : 'No sign-in sheet is open yet.';
+    updateEntryLabels();
+  }
+
+  document.getElementById('btn-add-entry').addEventListener('click', () => {
+    document.getElementById('entry-username').value = '';
+    document.getElementById('entry-password').value = '';
+    const resuming = !sessionId && !!pendingId;
+    document.getElementById('entry-room-wrap').classList.toggle('hidden', resuming || !!sessionId);
+    document.getElementById('entry-room-note').textContent = resuming
+      ? 'Signing in will bring back the sign-in sheet that was open on this computer.'
+      : (sessionId ? 'This tutor will be added to the sheet that is open on this computer.'
+                   : 'The first tutor to sign in to a room starts its sheet and becomes Room Lead. Everyone after that joins it.');
+    const chosen = document.querySelector('input[name="room-type"]:checked').value;
+    document.querySelector('input[name="entry-room-type"][value="' + chosen + '"]').checked = true;
+    updateEntryLabels();
+    openModal('modal-add-entry');
+  });
+
+  document.getElementById('entry-submit').addEventListener('click', async () => {
+    const username = document.getElementById('entry-username').value.trim();
+    const password = document.getElementById('entry-password').value.trim();
+    if (!username || !password) { alert('Enter both username and password.'); return; }
+
+    const { data, error } = await db.rpc('tutor_checker', { p_username: username, p_password: password });
+    if (error || !data || data.length === 0) { alert(error && /too many/i.test(error.message || '') ? error.message : 'Username or password not recognized.'); return; }
+    if (!me) me = username;
+    const roomType = document.querySelector('input[name="entry-room-type"]:checked').value;
+    closeModal('modal-add-entry');
+
+    if (sessionId) {                       // a sheet is already open here: add this tutor to it
+      const r = await live('live_add_tutor', { p_username: username });
+      if (r.error) { alert(r.error.message); return; }
+      applyState(r.data);
+      alert(username + ' added as Tutor.');
+      return;
+    }
+    if (pendingId) {                       // pick the old sheet back up after a refresh
+      if (await joinSession(pendingId)) { alert('Welcome back. Your sign-in sheet is restored.'); return; }
+      pendingId = null; localStorage.removeItem(SAVED_KEY);
+    }
+    const r = await db.rpc('live_enter', {
+      p_room_type: roomType,
+      p_room_number: document.getElementById('room-number').value.trim()
+    });
+    if (r.error) { alert('Could not open the sheet: ' + r.error.message); return; }
+    applyState(r.data);
+    refreshOpenRooms();
+    alert(r.data.started ? username + ' signed in as Room Lead for the ' + roomType + ' room.' : 'Joined the ' + roomType + ' room sheet as Tutor.');
+  });
+
+  /* ---------- Edit Tutors modal ---------- */
+  const tabRole = document.getElementById('tab-role');
+  const tabAdd = document.getElementById('tab-add');
+  const tabRemove = document.getElementById('tab-remove');
+  const panelRole = document.getElementById('panel-role');
+  const panelAdd = document.getElementById('panel-add');
+  const panelRemove = document.getElementById('panel-remove');
+
+  function showTutorTab(tab) {
+    [tabRole, tabAdd, tabRemove].forEach(t => t.classList.remove('active'));
+    [panelRole, panelAdd, panelRemove].forEach(p => p.classList.add('hidden'));
+    if (tab === 'role') { tabRole.classList.add('active'); panelRole.classList.remove('hidden'); }
+    if (tab === 'add') { tabAdd.classList.add('active'); panelAdd.classList.remove('hidden'); }
+    if (tab === 'remove') { tabRemove.classList.add('active'); panelRemove.classList.remove('hidden'); }
+  }
+  tabRole.addEventListener('click', () => showTutorTab('role'));
+  tabAdd.addEventListener('click', () => showTutorTab('add'));
+  tabRemove.addEventListener('click', () => showTutorTab('remove'));
+
+  document.getElementById('btn-edit-tutors').addEventListener('click', () => {
+    showTutorTab('role');
+    renderTutors();
+    openModal('modal-edit-tutors');
+  });
+
+  async function confirmTutor(user, pass) {
+    const { data, error } = await db.rpc('tutor_checker', { p_username: user, p_password: pass });
+    if (error && /too many/i.test(error.message || '')) alert(error.message);
+    return !(error || !data || data.length === 0);
+  }
+
+  document.getElementById('role-submit').addEventListener('click', async () => {
+    const target = document.getElementById('role-target-username').value;
+    const newRole = document.getElementById('role-new-value').value;
+    const confirmUser = document.getElementById('role-confirm-username').value.trim();
+    const confirmPass = document.getElementById('role-confirm-password').value.trim();
+    if (!confirmUser || !confirmPass) { alert('Confirmation username and password required.'); return; }
+    if (!(await confirmTutor(confirmUser, confirmPass))) { alert('Confirming username or password not recognized.'); return; }
+    const r = await live('live_set_role', { p_target: target, p_new_role: newRole });
+    if (r.error) { alert(r.error.message); return; }
+    applyState(r.data);
+    document.getElementById('role-confirm-username').value = '';
+    document.getElementById('role-confirm-password').value = '';
+    alert(target + ' is now ' + newRole + '.');
+  });
+
+  document.getElementById('add-tutor-submit').addEventListener('click', async () => {
+    const username = document.getElementById('add-tutor-username').value.trim();
+    const password = document.getElementById('add-tutor-password').value.trim();
+    if (!username || !password) { alert('Enter both username and password.'); return; }
+    if (!(await confirmTutor(username, password))) { alert('Username or password not recognized.'); return; }
+    const r = await live('live_add_tutor', { p_username: username });
+    if (r.error) { alert(r.error.message); return; }
+    applyState(r.data);
+    document.getElementById('add-tutor-username').value = '';
+    document.getElementById('add-tutor-password').value = '';
+    alert(username + ' added as Tutor.');
+  });
+
+  document.getElementById('remove-tutor-submit').addEventListener('click', async () => {
+    const name = document.getElementById('remove-tutor-name').value.trim();
+    const confirmUser = document.getElementById('remove-tutor-confirm-username').value.trim();
+    const confirmPass = document.getElementById('remove-tutor-confirm-password').value.trim();
+    if (!name || !confirmUser || !confirmPass) { alert('Enter the tutor to remove and a confirming username and password.'); return; }
+    if (!(await confirmTutor(confirmUser, confirmPass))) { alert('Confirming username or password not recognized.'); return; }
+    const r = await live('live_remove_tutor', { p_name: name });
+    if (r.error) { alert(r.error.message); return; }
+    applyState(r.data);
+    document.getElementById('remove-tutor-name').value = '';
+    document.getElementById('remove-tutor-confirm-username').value = '';
+    document.getElementById('remove-tutor-confirm-password').value = '';
+    alert(r.data.removed ? name + ' removed.' : 'No matching tutor found.');
+  });
+
+  /* ---------- Add Student / Edit Student ---------- */
+  document.getElementById('btn-add-tutee').addEventListener('click', () => openModal('modal-add-tutee'));
+  document.getElementById('btn-edit-tutee').addEventListener('click', () => { fillTimeChoices(); openModal('modal-edit-tutee'); });
+
+  const removeSelect = document.getElementById('remove-student-select');
+  function fillRemoveChoices() {
+    const keep = removeSelect.value;
+    removeSelect.innerHTML = '';
+    tutees.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = t.name + ' — ' + t.subject + ' (in ' + t.signedIn.slice(0, 5) + ')';
+      removeSelect.appendChild(o);
+    });
+    if (keep && tutees.some(t => t.id === keep)) removeSelect.value = keep;
+  }
+  document.getElementById('btn-remove-tutee').addEventListener('click', () => { fillRemoveChoices(); openModal('modal-remove-tutee'); });
+  document.getElementById('btn-do-remove-student').addEventListener('click', async () => {
+    const t = tutees.find(x => x.id === removeSelect.value);
+    if (!t) { alert('There is no student to remove.'); return; }
+    if (!confirm('Remove ' + t.name + ' (' + t.subject + ') from this sheet?')) return;
+    const r = await live('live_remove_student', { p_student_id: t.id });
+    if (r.error) { alert(r.error.message); return; }
+    applyState(r.data);
+    fillRemoveChoices();
+    alert(t.name + ' was removed.');
+  });
+
+  const editTabs = { info: ['tab-edit-info', 'panel-edit-info'], out: ['tab-sign-out', 'panel-sign-out'], time: ['tab-edit-time', 'panel-edit-time'] };
+  function showEditTab(key) {
+    Object.entries(editTabs).forEach(([k, [t, p]]) => {
+      document.getElementById(t).classList.toggle('active', k === key);
+      document.getElementById(p).classList.toggle('hidden', k !== key);
+    });
+  }
+  document.getElementById('tab-edit-info').addEventListener('click', () => showEditTab('info'));
+  document.getElementById('tab-sign-out').addEventListener('click', () => showEditTab('out'));
+  document.getElementById('tab-edit-time').addEventListener('click', () => { fillTimeChoices(); showEditTab('time'); });
+
+  /* Suggestions from the AIP list as a name is typed (3+ letters, up to 6 matches) */
+  const nameInput = document.getElementById('tutee-name');
+  const suggestBox = document.getElementById('name-suggest');
+  let suggestTimer = null;
+  nameInput.addEventListener('input', () => {
+    clearTimeout(suggestTimer);
+    const q = nameInput.value.trim();
+    if (q.length < 3 || !sessionId) { suggestBox.classList.add('hidden'); return; }
+    suggestTimer = setTimeout(async () => {
+      const r = await db.rpc('live_name_suggest', { p_prefix: q });
+      if (r.error || !r.data || r.data.length === 0 || nameInput.value.trim() !== q) { suggestBox.classList.add('hidden'); return; }
+      suggestBox.innerHTML = '';
+      r.data.forEach(m => {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:8px 12px; cursor:pointer; font-size:0.88rem;';
+        row.textContent = m.name + ' — ' + m.subject + ' (' + m.teacher + ')';
+        row.addEventListener('mousedown', e => {
+          e.preventDefault();
+          nameInput.value = m.name;
+          document.getElementById('tutee-subject').value = m.subject;
+          document.querySelector('#tutee-subject-searchable .ss-input').value = m.subject;
+          document.getElementById('tutee-teacher').value = m.teacher;
+          suggestBox.classList.add('hidden');
+        });
+        suggestBox.appendChild(row);
+      });
+      suggestBox.classList.remove('hidden');
+    }, 350);
+  });
+  nameInput.addEventListener('blur', () => setTimeout(() => suggestBox.classList.add('hidden'), 150));
+
+  document.getElementById('tutee-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    const name = document.getElementById('tutee-name').value.trim();
+    const subject = document.getElementById('tutee-subject').value;
+    const teacher = document.getElementById('tutee-teacher').value;
+    if (!name) return;
+    if (!subject) { alert('Pick a subject from the search list before submitting.'); return; }
+    // show the student right away, save in the background
+    const temp = { pending: true, name, subject, teacher, signedIn: timeStringFull(new Date()), signedOut: '' };
+    pendingAdds.push(temp);
+    renderTutees();
+    this.reset();
+    suggestBox.classList.add('hidden');
+    closeModal('modal-add-tutee');
+    live('live_add_student', { p_name: name, p_subject: subject, p_teacher: teacher }).then(r => {
+      pendingAdds = pendingAdds.filter(x => x !== temp);
+      if (r.error) { renderTutees(); alert('Could not add ' + name + ': ' + r.error.message); return; }
+      applyState(r.data);
+    });
+  });
+
+  document.getElementById('btn-do-signout').addEventListener('click', async () => {
+    const name = document.getElementById('signout-name').value.trim();
+    if (!name) return;
+    const r = await live('live_signout_student', { p_name: name });
+    if (r.error) { alert(r.error.message); return; }
+    applyState(r.data);
+    alert(r.data.matched > 0 ? `Signed out ${r.data.matched} session(s) for ${name}.` : 'No matching active sessions found.');
+    document.getElementById('signout-name').value = '';
+  });
+
+  /* Edit Time */
+  const timeStudent = document.getElementById('time-student');
+  const timeIn = document.getElementById('time-in');
+  const timeOut = document.getElementById('time-out');
+
+  function fillTimeChoices() {
+    const keep = timeStudent.value;
+    timeStudent.innerHTML = '';
+    tutees.forEach(t => {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = t.name + ' — ' + t.subject + ' (' + t.signedIn.slice(0, 5) + (t.signedOut ? '–' + t.signedOut.slice(0, 5) : ' – here') + ')';
+      timeStudent.appendChild(o);
+    });
+    if (keep && tutees.some(t => t.id === keep)) timeStudent.value = keep;
+    loadTimeFields();
+  }
+  function loadTimeFields() {
+    const t = tutees.find(x => x.id === timeStudent.value);
+    timeIn.value = t ? t.signedIn.slice(0, 5) : '';
+    timeOut.value = t && t.signedOut ? t.signedOut.slice(0, 5) : '';
+    showDuration();
+  }
+  function showDuration() {
+    const el = document.getElementById('time-duration');
+    if (!timeIn.value || !timeOut.value) { el.textContent = timeOut.value ? '' : 'Still signed in — it will be closed when the sheet is submitted.'; return; }
+    const [a, b] = timeIn.value.split(':').map(Number), [c, d] = timeOut.value.split(':').map(Number);
+    const mins = (c * 60 + d) - (a * 60 + b);
+    el.textContent = 'Time here: ' + mins + ' minutes' + (mins < 50 ? ' (under 50, so it will NOT count toward the Struggling Students list)' : '');
+  }
+  timeStudent.addEventListener('change', loadTimeFields);
+  timeIn.addEventListener('input', showDuration);
+  timeOut.addEventListener('input', showDuration);
+
+  document.getElementById('btn-save-time').addEventListener('click', async () => {
+    if (!timeStudent.value) { alert('There is no student to edit yet.'); return; }
+    if (!timeIn.value) { alert('Enter the sign-in time.'); return; }
+    if (timeOut.value && timeOut.value < timeIn.value) { alert('The sign-out time cannot be before the sign-in time.'); return; }
+    const r = await live('live_edit_time', { p_student_id: timeStudent.value, p_signed_in: timeIn.value, p_signed_out: timeOut.value });
+    if (r.error) { alert(r.error.message); return; }
+    applyState(r.data);
+    fillTimeChoices();
+    alert('Times saved.');
+  });
+
+  /* ---------- Submit Entry (saves the sheet, gives each tutor one hour, ends it everywhere) ---------- */
+  document.getElementById('btn-submit-entry').addEventListener('click', () => {
+    if (!sessionId) { alert('Sign in as a tutor first using the Sign In as Tutor button.'); return; }
+    document.getElementById('submit-username').value = '';
+    document.getElementById('submit-password').value = '';
+    openModal('modal-submit-entry');
+  });
+
+  const CLOSED_SHEET = /already been submitted|no longer active|not found/i;
+
+  document.getElementById('submit-entry-confirm').addEventListener('click', async () => {
+    const btn = document.getElementById('submit-entry-confirm');
+    try {
+      const username = document.getElementById('submit-username').value.trim();
+      const password = document.getElementById('submit-password').value.trim();
+      if (!username || !password) { alert('Enter both username and password.'); return; }
+      if (!selectedDate) { alert('Select a date on the calendar first.'); return; }
+      if (!(await confirmTutor(username, password))) { alert('Username or password not recognized.'); return; }
+
+      btn.disabled = true;
+      const r = await live('live_finish', { p_session_date: toISODate(selectedDate) });
+      if (r.error) {
+        if (CLOSED_SHEET.test(r.error.message)) {      // already closed (for example submitted on another computer)
+          alert('This sign-in sheet is already closed, so this page is being reset.');
+          closeModal('modal-submit-entry');
+          resetPageForNewEntry();
+          return;
+        }
+        alert('Could not submit: ' + r.error.message + '\n\nNothing was saved or lost, and your sheet is still open. Try again. If it keeps failing, use "Cancel This Sheet" and send this message to an admin.');
+        return;
+      }
+      const x = r.data;
+      alert(`Entry submitted. ${x.closed} still-signed-in student(s) auto-signed-out. ${x.saved} record(s) saved.` +
+            (x.skipped > 0 ? ` ${x.skipped} record(s) were already on the roster and were skipped.` : '') +
+            ` Hours added for ${x.hours} tutor(s).`);
+      closeModal('modal-submit-entry');
+      resetPageForNewEntry();
+    } catch (err) {
+      alert('Something went wrong while submitting: ' + (err && err.message ? err.message : err));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  /* Cancel This Sheet (Room Lead only): the way out of a stuck sheet */
+  document.getElementById('btn-cancel-sheet').addEventListener('click', () => {
+    if (!sessionId) return;
+    document.getElementById('cancel-username').value = '';
+    document.getElementById('cancel-password').value = '';
+    openModal('modal-cancel-sheet');
+  });
+  document.getElementById('cancel-sheet-confirm').addEventListener('click', async () => {
+    const username = document.getElementById('cancel-username').value.trim();
+    const password = document.getElementById('cancel-password').value.trim();
+    if (!username || !password) { alert('Enter the Room Lead username and password.'); return; }
+    if (!(await confirmTutor(username, password))) { alert('Username or password not recognized.'); return; }
+    if (!confirm('Cancel this whole sheet? It will NOT be saved to the roster and tutors get no hours.')) return;
+    const r = await live('live_discard', {});
+    if (r.error) {
+      if (CLOSED_SHEET.test(r.error.message)) { closeModal('modal-cancel-sheet'); resetPageForNewEntry(); }
+      alert(r.error.message);
+      return;
+    }
+    closeModal('modal-cancel-sheet');
+    alert('The sheet was cancelled. ' + r.data.archived + ' student(s) were kept in the review archive. You can start a new sheet now.');
+    resetPageForNewEntry();
+  });
+
+  function resetPageForNewEntry() {
+    stopPolling();
+    sessionId = null; pendingId = null; me = null;
+    localStorage.removeItem(SAVED_KEY);
+    tutees = []; pendingAdds = []; tutors = [];
+    renderTutees(); renderTutors(); fillTimeChoices(); fillRemoveChoices();
+    setLocked(true);
+    document.getElementById('room-number').value = '';
+    document.getElementById('room-number').disabled = false;
+    document.querySelectorAll('input[name="room-type"]').forEach(r => { r.disabled = false; });
+    document.querySelector('input[name="room-type"][value="Upper"]').checked = true;
+    selectedDate = null;
+    document.querySelectorAll('.day-cell.selected').forEach(el => el.classList.remove('selected'));
+    dateDisplay.textContent = 'Date: --/--/----';
+    document.getElementById('resume-banner').classList.add('hidden');
+    updateSubmitVisibility();
+    setStatus('');
+    refreshOpenRooms();
+  }
+
+  /* ---------- Page start: which rooms are open, and getting back a sheet after a refresh ---------- */
+  (async function init() {
+    refreshOpenRooms();
+    setInterval(refreshOpenRooms, 15000);
+    const saved = localStorage.getItem(SAVED_KEY);
+    if (!saved) return;
+    if (!sessionStorage.getItem('live_token')) { pendingId = saved; document.getElementById('resume-banner').classList.remove('hidden'); return; }
+    const r = await db.rpc('live_state', { p_session_id: saved });
+    if (r.error) {
+      if (/log in again/i.test(r.error.message)) { pendingId = saved; document.getElementById('resume-banner').classList.remove('hidden'); }
+      else { localStorage.removeItem(SAVED_KEY); }
+      return;
+    }
+    applyState(r.data);
+  })();
+
+  addInfoTips({
+    'room-number': 'The physical room number you\'re tutoring in today.',
+    'btn-add-entry': 'Sign in with your tutor username and password. The first tutor to do this for a room starts that room\'s sheet and becomes Room Lead; everyone after that just joins it.',
+    'btn-edit-tutors': 'Change a tutor\'s role on this sheet, add another tutor, or remove one. Unlocks once you\'ve signed in above.',
+    'btn-add-tutee': 'Sign a student in to this sheet with their subject and teacher. Unlocks once you\'ve signed in above.',
+    'btn-edit-tutee': 'Edit a signed-in student\'s subject/teacher, sign them out, or correct their sign-in/sign-out time. Unlocks once you\'ve signed in above.',
+    'btn-remove-tutee': 'Take a student off this sheet entirely — use this only if they were added by mistake. Unlocks once you\'ve signed in above.',
+    'btn-submit-entry': 'Saves today\'s sheet to the roster, signs out anyone still here, and gives every tutor on this sheet credit for their hours. Room Lead only.',
+    'btn-cancel-sheet': 'Closes this sheet on every computer WITHOUT saving it — no attendance or hours are recorded. Use only if the sheet is stuck or was started by mistake. Room Lead only.',
+    'entry-username': 'Your tutor username.',
+    'entry-password': 'Your tutor password.',
+    'tutee-name': 'The student\'s full name. Start typing to see suggestions from the Struggling Students list.',
+    'tutee-teacher': 'Which teacher this session is for.',
+    'cancel-username': 'The Room Lead\'s username, to confirm this cancellation.',
+    'cancel-password': 'The Room Lead\'s password, to confirm this cancellation.',
+    'submit-username': 'The Room Lead\'s username, to confirm this submission.',
+    'submit-password': 'The Room Lead\'s password, to confirm this submission.',
+    'edit-tutee-name': 'The student\'s name exactly as it appears on this sheet.',
+    'signout-name': 'The student\'s name exactly as it appears on this sheet. This signs out every active session for that name.',
+    'time-student': 'Which student\'s sign-in/sign-out time you\'re correcting.',
+    'time-in': 'The corrected time this student signed in.',
+    'time-out': 'The corrected time this student signed out, or leave blank if they\'re still here.',
+    'remove-student-select': 'Which student to remove from this sheet.'
+  });
+</script>
+</body>
+</html>
