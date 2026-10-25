@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tutor Sign Up/In · Academic Central</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<script src="config.js"></script>
+<script src="tooltips.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="title-bar"><a class="brand" href="home.html"><img class="brand-logo" src="logo.svg" alt=""><span class="brand-name"><span class="bn1" data-brand="first">Academic</span> <span class="bn2" data-brand="second">Central</span></span></a></div>
+    <div class="subtitle-bar">Tutor Sign In</div>
+
+    <form class="panel" id="login-form">
+      <label for="username">Username:</label>
+      <input type="text" id="username" name="username" required>
+      <label for="password">Password:</label>
+      <input type="password" id="password" name="password" required>
+      <div class="check-group">
+        <label><input type="checkbox" id="show-password"> Show password</label>
+      </div>
+    </form>
+
+    <div class="panel hidden" id="not-found-panel">
+      <p style="color:var(--gold); font-weight:bold; margin:0;">
+        Not found in database. Contact help if this is incorrect.
+      </p>
+    </div>
+
+    <button class="btn" id="submit-btn" type="submit" form="login-form">Sign In</button>
+    <p style="margin-top:14px; font-size:0.9rem; color:var(--ink-soft);">
+      Not a tutor yet? <a href="applications.html" style="color:var(--blue);">Apply here</a>
+    </p>
+    <a class="back-link" href="home.html">&larr; Back to Home</a>
+  </div>
+
+<script>
+  const SUPABASE_URL = APP_CONFIG.supabaseUrl;
+  const SUPABASE_ANON_KEY = APP_CONFIG.supabaseAnonKey;
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const form = document.getElementById('login-form');
+  const notFoundPanel = document.getElementById('not-found-panel');
+  const usernameInput = document.getElementById('username');
+  const passwordInput = document.getElementById('password');
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const username = usernameInput.value.trim();
+    const password = passwordInput.value.trim();
+
+    const { data, error } = await db.rpc('tutor_checker', {
+      p_username: username,
+      p_password: password
+    });
+
+    if (error) {
+      console.error(error);
+      notFoundPanel.classList.remove('hidden');
+      return;
+    }
+
+    const match = data && data.length > 0 ? data[0] : null;
+
+    if (match) {
+      sessionStorage.setItem('tutor_session', JSON.stringify({
+        id: match.id,
+        full_name: match.full_name,
+        role: match.role,
+        day_assigned: match.day_assigned,
+        room_assigned: match.room_assigned,
+        hours_volunteered: match.hours_volunteered,
+        username: username
+      }));
+      window.location.href = 'tutors-dashboard.html';
+      return;
+    }
+
+    notFoundPanel.classList.remove('hidden');
+  });
+</script>
+
+<script>
+  // Show/hide password toggle
+  document.getElementById('show-password').addEventListener('change', function () {
+    document.getElementById('password').type = this.checked ? 'text' : 'password';
+  });
+</script>
+
+<script>
+  addInfoTips({
+    'username': 'The username you were given when you were accepted as a tutor — usually your first name, a dot, then your last name, all lowercase.',
+    'password': 'Your tutor password. If you\'ve forgotten it, you can set a new one from your dashboard once you\'re signed in (ask a Head Admin or your Room Lead for help getting in).',
+    'submit-btn': 'Checks your username and password and takes you to your tutor dashboard if they match.'
+  });
+</script>
+</body>
+</html>

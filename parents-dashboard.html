@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parent Dashboard · Academic Central</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<script src="config.js"></script>
+<script src="tooltips.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  .hero {
+    background: var(--blue-soft);
+    border-radius: 16px;
+    padding: 28px 30px;
+    margin-bottom: 20px;
+  }
+  .hero .name { font-size: 1.4rem; font-weight: 800; color: var(--blue-dark); }
+  .hero .role-badge {
+    display: inline-block; margin-top: 8px;
+    background: var(--surface); border: 1px solid var(--blue-line);
+    color: var(--blue-dark); font-weight: 600; font-size: 0.85rem;
+    padding: 4px 12px; border-radius: 999px;
+  }
+
+  .week-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .week-nav .week-label { font-weight: 700; text-align: center; flex: 1; }
+  .week-nav button {
+    background: transparent; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    font-family: inherit; font-size: 0.85rem; font-weight: 500;
+  }
+  .week-nav button:hover:not(:disabled) { background: var(--gold-soft); border-color: var(--gold-bright); }
+  .week-nav button:disabled { opacity: 0.4; cursor: default; }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 14px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px 16px;
+    text-align: center;
+  }
+  .stat-card .label { font-size: 0.78rem; font-weight: 600; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.03em; }
+  .stat-card .date { font-size: 0.8rem; color: var(--ink-soft); margin-top: 2px; }
+  .stat-card .value { font-size: 2rem; font-weight: 800; margin-top: 8px; }
+  .attended { color: #15803D; }
+  .absent { color: #B91C1C; }
+  .pending { color: var(--ink-soft); }
+  .legend { margin-top: 14px; font-size: 0.82rem; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="title-bar"><a class="brand" href="home.html"><img class="brand-logo" src="logo.svg" alt=""><span class="brand-name"><span class="bn1" data-brand="first">Academic</span> <span class="bn2" data-brand="second">Central</span></span></a></div>
+    <div id="session-bar" style="color:var(--ink-soft); font-size:0.85rem; margin:-6px 0 14px; text-align:right;"></div>
+
+    <div class="hero">
+      <div class="name" id="hero-name">—</div>
+      <div class="role-badge" id="hero-grade">—</div>
+    </div>
+
+    <div class="week-nav">
+      <button type="button" id="prev-week">&larr; Previous</button>
+      <div class="week-label" id="week-label">—</div>
+      <button type="button" id="next-week">Next &rarr;</button>
+    </div>
+
+    <div class="stat-grid" id="day-grid"></div>
+
+    <p class="legend">&#10003; attended &nbsp;&nbsp; &#10007; did not attend, or was there under 50 minutes &nbsp;&nbsp; &mdash; not recorded yet (today or a future day)</p>
+
+    <button class="btn secondary" id="pw-btn" type="button" style="margin-top:18px;">Change Password</button>
+
+    <br>
+    <a class="back-link" href="home.html">&larr; Back to Home</a>
+  </div>
+
+  <!-- Change Password modal -->
+  <div class="modal-overlay hidden" id="pw-modal">
+    <div class="modal">
+      <h3>Change Password</h3>
+      <form id="pw-form" autocomplete="off">
+        <label for="pw-old">Current password:</label>
+        <input type="password" id="pw-old" autocomplete="current-password">
+        <label for="pw-new">New password <span style="font-weight:400;color:var(--ink-soft);font-size:0.85rem;">(at least 8 characters)</span>:</label>
+        <input type="password" id="pw-new" autocomplete="new-password">
+        <label for="pw-new2">Type the new password again:</label>
+        <input type="password" id="pw-new2" autocomplete="new-password">
+        <div class="check-group">
+          <label><input type="checkbox" id="pw-show"> Show passwords</label>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:22px;">
+          <button class="btn" type="button" id="pw-submit">Save</button>
+          <button class="btn secondary" type="button" id="pw-cancel">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<script>
+  const raw = sessionStorage.getItem('parent_session');
+  if (!raw) {
+    window.location.href = 'parents.html';
+  }
+  const session = JSON.parse(raw || '{}');
+  const attended = new Set(session.attended_dates || []);
+  const shortDates = new Set(session.short_dates || []);   // signed in, but under 50 minutes
+
+  document.getElementById('session-bar').innerHTML =
+    `Logged in as ${session.username} &nbsp;|&nbsp; ` +
+    `<a href="#" id="logout-link" style="color:var(--blue);">Log out</a>`;
+  document.getElementById('logout-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    sessionStorage.removeItem('parent_session');
+    window.location.href = 'home.html';
+  });
+
+  document.getElementById('hero-name').textContent = session.scholar_name || '—';
+  document.getElementById('hero-grade').textContent = session.grade ? 'Grade ' + session.grade : 'Student';
+
+  /* ---------- Week helpers (all in local time) ---------- */
+  const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  function iso(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function mondayOf(d) {
+    const m = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const dow = m.getDay();                 // 0 = Sunday ... 6 = Saturday
+    m.setDate(m.getDate() - (dow === 0 ? 6 : dow - 1));
+    return m;
+  }
+  function pretty(d) { return MONTHS[d.getMonth()] + ' ' + d.getDate(); }
+
+  const today = new Date();
+  const todayIso = iso(today);
+  const thisMonday = mondayOf(today);
+  let weekStart = new Date(thisMonday);
+
+  function renderWeek() {
+    const friday = new Date(weekStart);
+    friday.setDate(friday.getDate() + 4);
+    document.getElementById('week-label').textContent = `${pretty(weekStart)} – ${pretty(friday)}`;
+    document.getElementById('next-week').disabled = iso(weekStart) >= iso(thisMonday);
+
+    const grid = document.getElementById('day-grid');
+    grid.innerHTML = '';
+
+    DAY_NAMES.forEach((dayName, i) => {
+      const d = new Date(weekStart);
+      d.setDate(d.getDate() + i);
+      const dIso = iso(d);
+
+      let symbol, cls;
+      if (attended.has(dIso)) { symbol = '\u2713'; cls = 'attended'; }
+      else if (shortDates.has(dIso)) { symbol = '\u2717'; cls = 'absent'; }   // there, but under 50 minutes
+      else if (dIso >= todayIso) { symbol = '\u2014'; cls = 'pending'; }   // today or future, nothing recorded
+      else { symbol = '\u2717'; cls = 'absent'; }
+
+      const card = document.createElement('div');
+      card.className = 'stat-card';
+      card.innerHTML =
+        `<div class="label">${dayName}</div>` +
+        `<div class="date">${pretty(d)}</div>` +
+        `<div class="value ${cls}">${symbol}</div>`;
+      grid.appendChild(card);
+    });
+  }
+
+  document.getElementById('prev-week').addEventListener('click', () => {
+    weekStart.setDate(weekStart.getDate() - 7);
+    renderWeek();
+  });
+  document.getElementById('next-week').addEventListener('click', () => {
+    weekStart.setDate(weekStart.getDate() + 7);
+    renderWeek();
+  });
+
+  renderWeek();
+
+  /* ---------- Supabase (needed for Change Password) ---------- */
+  const SUPABASE_URL = APP_CONFIG.supabaseUrl;
+  const SUPABASE_ANON_KEY = APP_CONFIG.supabaseAnonKey;
+  const { createClient } = supabase;
+  const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  /* ---------- Change password ---------- */
+  (function () {
+    const modal = document.getElementById('pw-modal');
+    const ids = ['pw-old', 'pw-new', 'pw-new2'];
+    function closePw() {
+      modal.classList.add('hidden');
+      document.getElementById('pw-form').reset();
+      ids.forEach(id => { document.getElementById(id).type = 'password'; });
+    }
+    document.getElementById('pw-btn').addEventListener('click', () => modal.classList.remove('hidden'));
+    document.getElementById('pw-cancel').addEventListener('click', closePw);
+    document.getElementById('pw-show').addEventListener('change', function () {
+      ids.forEach(id => { document.getElementById(id).type = this.checked ? 'text' : 'password'; });
+    });
+    document.getElementById('pw-submit').addEventListener('click', async () => {
+      const oldPw = document.getElementById('pw-old').value.trim();
+      const newPw = document.getElementById('pw-new').value.trim();
+      const newPw2 = document.getElementById('pw-new2').value.trim();
+      if (!oldPw) { alert('Enter your current password.'); return; }
+      if (newPw.length < 8) { alert('The new password must be at least 8 characters.'); return; }
+      if (newPw !== newPw2) { alert('The two new passwords do not match.'); return; }
+      if (newPw === oldPw) { alert('Choose a password different from your current one.'); return; }
+      const { error } = await db.rpc('change_password', {
+        p_kind: 'parent', p_username: session.username, p_old_password: oldPw, p_new_password: newPw
+      });
+      if (error) { alert(error.message); return; }
+
+      closePw();
+      alert('Password changed. Use the new one next time you sign in.');
+    });
+  })();
+
+  addInfoTips({
+    'pw-btn': 'Change the password you use to sign in and see your student\'s attendance.',
+    'prev-week': 'View attendance for the week before this one.',
+    'next-week': 'View attendance for the week after this one. Disabled once you reach the current week — attendance can\'t be shown for weeks that haven\'t happened yet.'
+  });
+</script>
+</body>
+</html>
