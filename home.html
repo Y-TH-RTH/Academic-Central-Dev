@@ -11,10 +11,24 @@
      full window to scroll through the hero → nav-cards transition. */
   body { padding: 0; animation: none; }
 
-  #hero-fixed {
-    position: fixed;
-    inset: 0;
-    z-index: 5;
+  /* The hero is a tall section (180vh) whose inner box is position:sticky.
+     While the section scrolls by, the sticky box stays pinned to the top
+     of the viewport — so the heading genuinely never moves — and once the
+     section's extra height (80vh) has scrolled past, it naturally
+     scrolls away and the nav cards come up underneath it. This avoids the
+     earlier bug where a fixed-position hero + separate spacer could ask
+     for more scroll distance than the page actually had, so the cards
+     could never be reached. */
+  #hero-section {
+    position: relative;
+    height: 180vh;
+  }
+  #hero-sticky {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    width: 100%;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -60,14 +74,13 @@
     50% { transform: translateY(6px); }
   }
 
-  #scroll-spacer { height: 100vh; }
-
   #nav-wrap {
     position: relative;
     z-index: 1;
     max-width: 960px;
     margin: 0 auto;
     padding: 24px 24px 64px;
+    background: var(--bg);
     opacity: 0;
     transform: translateY(16px);
     transition: opacity 0.5s var(--ease), transform 0.5s var(--ease);
@@ -91,8 +104,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    #hero-fixed { position: static; height: auto; min-height: 60vh; }
-    #scroll-spacer { height: 0; }
+    #hero-section { height: auto; }
+    #hero-sticky { position: static; height: auto; min-height: 60vh; }
     #nav-wrap { opacity: 1; transform: none; }
     .scroll-cue { display: none; }
   }
@@ -100,18 +113,18 @@
 </head>
 <body>
 
-  <div id="hero-fixed">
-    <h1 id="hero-title"><span class="accent"></span>Academic Central</h1>
-    <p id="hero-desc">
-      A complete tutoring-program management platform. <b>Tutors</b> sign in and log sessions on a live, shared
-      sign-in sheet; <b>scholars</b> get their attendance tracked automatically and are flagged for extra help
-      when they need it; <b>parents</b> can log in any time to see exactly which days their scholar attended
-      tutoring; and <b>admins</b> manage applications, tutors, and struggling-student support from one dashboard.
-    </p>
-    <div class="scroll-cue" id="scroll-cue">Scroll to explore &darr;</div>
+  <div id="hero-section">
+    <div id="hero-sticky">
+      <h1 id="hero-title"><span class="accent"></span>Academic Central</h1>
+      <p id="hero-desc">
+        A complete tutoring-program management platform. <b>Tutors</b> sign in and log sessions on a live, shared
+        sign-in sheet; <b>scholars</b> get their attendance tracked automatically and are flagged for extra help
+        when they need it; <b>parents</b> can log in any time to see exactly which days their scholar attended
+        tutoring; and <b>admins</b> manage applications, tutors, and struggling-student support from one dashboard.
+      </p>
+      <div class="scroll-cue" id="scroll-cue">Scroll to explore &darr;</div>
+    </div>
   </div>
-
-  <div id="scroll-spacer"></div>
 
   <div id="nav-wrap">
     <div class="intro">
@@ -128,7 +141,7 @@
   </div>
 
 <script>
-  const heroFixed = document.getElementById('hero-fixed');
+  const heroSection = document.getElementById('hero-section');
   const heroDesc = document.getElementById('hero-desc');
   const scrollCue = document.getElementById('scroll-cue');
   const navWrap = document.getElementById('nav-wrap');
@@ -137,29 +150,35 @@
 
   function onScroll() {
     if (reduceMotion) return;
-    // Matches #scroll-spacer's height, so the description finishes fading
-    // to transparent exactly as the nav cards scroll up into view —
-    // no blank gap, no overlap.
-    const fadeDistance = Math.max(240, window.innerHeight);
+
+    // How far we've scrolled through the hero section's extra height
+    // (its total height minus one viewport, since the sticky box holds
+    // one viewport's worth pinned at the top the whole time).
+    const fadeDistance = Math.max(1, heroSection.offsetHeight - window.innerHeight);
     const progress = Math.min(1, Math.max(0, window.scrollY / fadeDistance));
 
-    // The heading never moves (it's in a position:fixed box) — only the
-    // description's opacity changes, fading smoothly to fully transparent.
+    // The heading never moves (it's inside the sticky box, pinned in
+    // place) — only the description's opacity changes, fading smoothly
+    // to fully transparent as you scroll.
     heroDesc.style.opacity = String(1 - progress);
     scrollCue.style.opacity = String(Math.max(0, 0.65 * (1 - progress * 2.5)));
-
-    if (progress >= 1) {
-      heroFixed.style.visibility = 'hidden';
-      navWrap.classList.add('visible');
-    } else {
-      heroFixed.style.visibility = 'visible';
-      navWrap.classList.remove('visible');
-    }
   }
+
+  // The nav cards fade in on their own, standard "scrolled into view"
+  // trigger — independent of the hero's fade math above, so it can never
+  // end up unreachable regardless of viewport size or content height.
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) navWrap.classList.add('visible');
+    });
+  }, { threshold: 0.12 });
+  observer.observe(navWrap);
 
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onScroll);
   onScroll();
+
+  if (reduceMotion) navWrap.classList.add('visible');
 </script>
 </body>
 </html>
